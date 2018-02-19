@@ -1,4 +1,5 @@
-// CC-by-www.Electrosmash.com open-source project.
+// CC-by-www.Electrosmash.com open-source project
+// clean.c effect pedal, the signal is read by the ADC and written again using 2 PWM sigmals.
 
 #include <bcm2835.h>
 #include <stdio.h>
@@ -10,10 +11,14 @@
 #define FOOT_SWITCH     RPI_GPIO_P1_10                                  //GPIO15
 #define LED             RPI_V2_GPIO_P1_36                               //GPIO16
 
-uint32_t read_timer=0;
+uint32_t read_timer=49999;
 uint32_t input_signal=0;
-uint32_t output_signal=0;
-uint32_t fuzz_value=100;                                                //good value to start.
+
+uint32_t min_signal=0;
+uint32_t max_signal=0;
+uint32_t avg_signal=0;
+uint32_t new_input_signal=0;
+int stats_ctr = 0;
 
 uint8_t FOOT_SWITCH_val;
 uint8_t TOGGLE_SWITCH_val;
@@ -39,10 +44,10 @@ int main(int argc, char **argv)
     bcm2835_gpio_fsel(18,BCM2835_GPIO_FSEL_ALT5 );                      //PWM0 signal on GPIO18
     bcm2835_gpio_fsel(13,BCM2835_GPIO_FSEL_ALT0 );                      //PWM1 signal on GPIO13
     bcm2835_pwm_set_clock(2);                                           // Max clk frequency (19.2MHz/2 = 9.6MHz)
-    bcm2835_pwm_set_mode(0,1 , 1);                                      //channel 0, markspace mode, PWM enabled.
-    bcm2835_pwm_set_range(0,64);                                        //channel 0, 64 is max range (6bits): 9.6MHz/64=150KHz switching PWM freq.
-    bcm2835_pwm_set_mode(1, 1, 1);                                      //channel 1, markspace mode, PWM enabled.
     bcm2835_pwm_set_range(1,64);                                        //channel 0, 64 is max range (6bits): 9.6MHz/64=150KHz switching PWM freq.
+    bcm2835_pwm_set_range(0,64);                                        //channel 0, 64 is max range (6bits): 9.6MHz/64=150KHz switching PWM freq.
+    bcm2835_pwm_set_mode(0, 0, 1);                                      //channel 0, markspace mode, PWM enabled.
+    bcm2835_pwm_set_mode(1, 0, 1);                                      //channel 1, markspace mode, PWM enabled.
 
 //define SPI bus configuration
     bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);            // The default
@@ -71,55 +76,50 @@ int main(int argc, char **argv)
 
     while(1)                                                            //Main Loop
     {
-//read 12 bits ADC
-        bcm2835_spi_transfernb(mosi, miso, 3);
-        input_signal = miso[2] + ((miso[1] & 0x0F) << 8);
 
 //Read the PUSH buttons every 50000 times (0.25s) to save resources.
         read_timer++;
-        if (read_timer==50000)
+        if (read_timer>=50000)
         {
             read_timer=0;
+            printf ("min %4d val %4d max %4d   new %d\n",min_signal, input_signal, max_signal, new_input_signal);
+	    if (stats_ctr++ > 20) {
+		stats_ctr = 0;
+		min_signal = max_signal = 2048;
+		printf ("-------------------\n");
+	    }
             uint8_t PUSH1_val = bcm2835_gpio_lev(PUSH1);
             uint8_t PUSH2_val = bcm2835_gpio_lev(PUSH2);
             TOGGLE_SWITCH_val = bcm2835_gpio_lev(TOGGLE_SWITCH);
             uint8_t FOOT_SWITCH_val = bcm2835_gpio_lev(FOOT_SWITCH);
-//light the effect when the footswitch is activated.
-//            bcm2835_gpio_write(LED,!FOOT_SWITCH_val);
-
-//update booster_value when the PUSH1 or 2 buttons are pushed.
-            if (PUSH1_val==0)                                           //less fuzz
-            {                                                           //100ms delay for buttons debouncing
-                bcm2835_delay(100);
-                if (fuzz_value<2047) fuzz_value=fuzz_value+10;
-		printf ("fuzz: %4d\n", fuzz_value);
-            }
-            else if (PUSH2_val==0)                                      //more fuzz
-            {                                                           //100ms delay for buttons debouncing.
-                bcm2835_delay(100);
-                if (fuzz_value>0) fuzz_value=fuzz_value-10;
-		printf ("fuzz: %4d\n", fuzz_value);
-            }
+//            bcm2835_gpio_write(LED,!FOOT_SWITCH_val);                   //light the effect when the footswitch is activated.
+            bcm2835_gpio_write(LED,!TOGGLE_SWITCH_val);                   //light the effect when the footswitch is activated.
         }
 
-//**** FUZZ EFFECT ***///
-//The input_signal is clipped to the maximum value when it reaches the distortion_value threshold.
-//The guitar signal fluctuates above and under 2047.
-        if (input_signal > 2047 + fuzz_value) {
-		input_signal= 4095;
-	}
-        if (input_signal < 2047 - fuzz_value) {
-		input_signal= 0;
-	}
+//read 12 bits ADC
+        bcm2835_spi_transfernb(mosi, miso, 3);
+        input_signal = miso[2] + ((miso[1] & 0x0F) << 8);
 
-	if (input_signal%4095 == 0 )
-                bcm2835_gpio_write(LED,1);
-	else
-                bcm2835_gpio_write(LED,0);
+//**** OCTAVE UP EFFECT ***///
+// Rectify the signal
+
+#define ADC_MAX 4096
+#define ADC_HALF ADC_MAX/2
+	new_input_signal = input_signal;
+        if (TOGGLE_SWITCH_val==0) {
+            if (new_input_signal < ADC_HALF )
+            {
+                new_input_signal = (ADC_MAX-1) - new_input_signal;		// -ve half becomes positive
+            }
+//            new_input_signal = 2*(new_input_signal-(ADC_HALF));				// re balance audio around 512
+	}
 
 //generate output PWM signal 6 bits
-        bcm2835_pwm_set_data(1,input_signal & 0x3F);
-        bcm2835_pwm_set_data(0,input_signal >> 6);
+        bcm2835_pwm_set_data(1,new_input_signal & 0x3F);
+        bcm2835_pwm_set_data(0,new_input_signal >> 6);
+
+	if (input_signal>max_signal) max_signal = input_signal;
+	if (input_signal<min_signal) min_signal = input_signal;
     }
 
 //close all and exit

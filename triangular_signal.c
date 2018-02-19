@@ -1,8 +1,8 @@
-// CC-by-www.Electrosmash.com Pedal-Pi open-source project.
-// reverb audio effect.
+// CC-by-www.Electrosmash.com open-source project
+// triangular wave generator
 
-#include <stdio.h>
 #include <bcm2835.h>
+#include <stdio.h>
 
 // Define Input Pins
 #define PUSH1           RPI_GPIO_P1_08                                  //GPIO14
@@ -11,30 +11,18 @@
 #define FOOT_SWITCH     RPI_GPIO_P1_10                                  //GPIO15
 #define LED             RPI_V2_GPIO_P1_36                               //GPIO16
 
-//Define Delay Effect parameters MAX_DELAY 800000 is 4 seconds approx.
-#define DELAY_MAX 800000
-#define DELAY_MIN 0
-
-uint32_t Echo_Buffer1[DELAY_MAX];
-uint32_t Echo_Buffer2[DELAY_MAX];
-uint32_t Echo_Buffer3[DELAY_MAX];
-uint32_t DelayCounter1 = 0;
-uint32_t DelayCounter2 = 0;
-uint32_t DelayCounter3 = 0;
-uint32_t Delay_Depth1 = 10000;                                          //default starting delay is 100000 is 0.5 sec approx.
-uint32_t Delay_Depth2 = 5000;                                           //default starting delay is 100000 is 0.25 sec approx.
-uint32_t Delay_Depth3 = 2500;                                           //default starting delay is 100000 is 0.125 sec approx.
-
+uint32_t read_timer=0;
 uint32_t input_signal=0;
-uint32_t output_signal=0;
-uint32_t read_timer;
+uint32_t speed=3;
+uint32_t up=1;
+uint32_t code_delay=0;
 
 uint8_t FOOT_SWITCH_val;
 uint8_t TOGGLE_SWITCH_val;
 uint8_t PUSH1_val;
 uint8_t PUSH2_val;
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
 // Start the BCM2835 Library to access GPIO.
     if (!bcm2835_init())
@@ -86,70 +74,52 @@ int main(int argc, char** argv)
     while(1)                                                            //Main Loop
     {
 //read 12 bits ADC
-        bcm2835_spi_transfernb(mosi, miso, 3);
-        input_signal = miso[2] + ((miso[1] & 0x0F) << 8);
+//bcm2835_spi_transfernb(mosi, miso, 3);
+//input_signal = miso[2] + ((miso[1] & 0x0F) << 8);
 
 //Read the PUSH buttons every 50000 times (0.25s) to save resources.
         read_timer++;
         if (read_timer==50000)
         {
             read_timer=0;
-            PUSH1_val = bcm2835_gpio_lev(PUSH1);
-            PUSH2_val = bcm2835_gpio_lev(PUSH2);
+            uint8_t PUSH1_val = bcm2835_gpio_lev(PUSH1);
+            uint8_t PUSH2_val = bcm2835_gpio_lev(PUSH2);
             TOGGLE_SWITCH_val = bcm2835_gpio_lev(TOGGLE_SWITCH);
-            FOOT_SWITCH_val = bcm2835_gpio_lev(FOOT_SWITCH);
-//light the effect when the footswitch is activated.
-            bcm2835_gpio_write(LED,!FOOT_SWITCH_val);
-
-//update volume variable when the PUSH buttons are pushed.
+            uint8_t FOOT_SWITCH_val = bcm2835_gpio_lev(FOOT_SWITCH);
+            bcm2835_gpio_write(LED,!FOOT_SWITCH_val);                   //light the effect when the footswitch is activated.
             if (PUSH2_val==0)
             {                                                           //100ms delay for buttons debouncing.
                 bcm2835_delay(100);
-                                                                        //50000 adds 25ms approx.
-                if (Delay_Depth1<DELAY_MAX) Delay_Depth1 += 5000;
-                                                                        //50000 adds 25ms approx.
-                if (Delay_Depth2<DELAY_MAX) Delay_Depth2 += 5000;
-                                                                        //50000 adds 25ms approx.
-                if (Delay_Depth3<DELAY_MAX) Delay_Depth3 += 5000;
+                speed++;
             }
             if (PUSH1_val==0)
             {
                 bcm2835_delay(100);                                     //100ms delay for buttons debouncing.
-                if (Delay_Depth1>DELAY_MIN) Delay_Depth1 -= 5000;
-                                                                        //50000 adds 25ms approx.
-                if (Delay_Depth2<DELAY_MAX) Delay_Depth2 -= 5000;
-                                                                        //50000 adds 25ms approx.
-                if (Delay_Depth3<DELAY_MAX) Delay_Depth3 -= 5000;
+                speed--;
             }
-
         }
 
-//**** REVERB EFFECT ***///
-//The echo effect is very similar to the echo, but with 3 Echo_Buffers instead of 1 (Echo_Buffer1/2/3)
+//**** TRIANGULAR SIGNAL GENERATOR ***///
+//Nothing to do, the input_signal goes directly to the PWM output.
 
-//Store current readings
-//the ">>1" makes the echo to decay, if you want a faster decay change it for ">>2" or ">>3"
+        code_delay++;
+        if (code_delay==10)
+        {
+            code_delay=0;
+            if (up==1)
+                input_signal=input_signal+speed;
+            else
+                input_signal=input_signal-speed;
 
-        Echo_Buffer1[DelayCounter1]  = (input_signal + Echo_Buffer1[DelayCounter1])>>1;
-        Echo_Buffer2[DelayCounter2]  = (input_signal + Echo_Buffer2[DelayCounter2])>>1;
-        Echo_Buffer3[DelayCounter3]  = (input_signal + Echo_Buffer3[DelayCounter3])>>1;
-
-        DelayCounter1++;
-        if(DelayCounter1 >= Delay_Depth1) DelayCounter1 = 0;
-
-        DelayCounter2++;
-        if(DelayCounter2 >= Delay_Depth2) DelayCounter2 = 0;
-
-        DelayCounter3++;
-        if(DelayCounter3 >= Delay_Depth3) DelayCounter3 = 0;
-
-        output_signal=(input_signal + (Echo_Buffer1[DelayCounter1])+(Echo_Buffer2[DelayCounter2])+(Echo_Buffer3[DelayCounter3]))>>2;
+            if (input_signal>4096-speed) up=0;
+            if (input_signal<0+ speed) up=1;
+        }
 
 //generate output PWM signal 6 bits
-        bcm2835_pwm_set_data(1,output_signal & 0x3F);
-        bcm2835_pwm_set_data(0,output_signal >> 6);
-
+        bcm2835_pwm_set_data(1,input_signal & 0x3F);
+        bcm2835_pwm_set_data(0,input_signal >> 6);
     }
+
 //close all and exit
     bcm2835_spi_end();
     bcm2835_close();
